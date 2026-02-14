@@ -36,16 +36,27 @@ export type TodoRecord = {
   updated_at: string;
 };
 
-export async function listTodos() {
+function toTodoRecord(row: Record<string, unknown>): TodoRecord {
+  return {
+    id: Number(row.id),
+    title: String(row.title),
+    completed: Boolean(row.completed),
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at)
+  };
+}
+
+export async function listTodos(): Promise<TodoRecord[]> {
   await ensureSchema();
-  return sql<TodoRecord[]>`
+  const rows = await sql`
     SELECT id, title, completed, created_at, updated_at
     FROM todos
     ORDER BY created_at DESC;
   `;
+  return rows.map(toTodoRecord);
 }
 
-export async function createTodo(title: string) {
+export async function createTodo(title: string): Promise<TodoRecord> {
   await ensureSchema();
   const trimmed = title.trim();
 
@@ -53,42 +64,43 @@ export async function createTodo(title: string) {
     throw new Error("Todo title is required.");
   }
 
-  const rows = await sql<TodoRecord[]>`
+  const rows = await sql`
     INSERT INTO todos (title)
     VALUES (${trimmed})
     RETURNING id, title, completed, created_at, updated_at;
   `;
 
-  return rows[0];
+  return toTodoRecord(rows[0]);
 }
 
 export async function updateTodo(
   id: number,
   patch: { title?: string; completed?: boolean }
-) {
+): Promise<TodoRecord | null> {
   await ensureSchema();
 
-  const existing = await sql<TodoRecord[]>`
+  const existingRows = await sql`
     SELECT id, title, completed, created_at, updated_at
     FROM todos
     WHERE id = ${id}
     LIMIT 1;
   `;
 
-  if (!existing[0]) {
+  if (!existingRows[0]) {
     return null;
   }
+  const existing = toTodoRecord(existingRows[0]);
 
   const nextTitle =
-    patch.title !== undefined ? patch.title.trim() : existing[0].title;
+    patch.title !== undefined ? patch.title.trim() : existing.title;
   const nextCompleted =
-    patch.completed !== undefined ? patch.completed : existing[0].completed;
+    patch.completed !== undefined ? patch.completed : existing.completed;
 
   if (!nextTitle) {
     throw new Error("Todo title cannot be empty.");
   }
 
-  const rows = await sql<TodoRecord[]>`
+  const rows = await sql`
     UPDATE todos
     SET title = ${nextTitle},
         completed = ${nextCompleted},
@@ -97,16 +109,16 @@ export async function updateTodo(
     RETURNING id, title, completed, created_at, updated_at;
   `;
 
-  return rows[0];
+  return rows[0] ? toTodoRecord(rows[0]) : null;
 }
 
-export async function deleteTodo(id: number) {
+export async function deleteTodo(id: number): Promise<TodoRecord | null> {
   await ensureSchema();
-  const rows = await sql<TodoRecord[]>`
+  const rows = await sql`
     DELETE FROM todos
     WHERE id = ${id}
     RETURNING id, title, completed, created_at, updated_at;
   `;
 
-  return rows[0] ?? null;
+  return rows[0] ? toTodoRecord(rows[0]) : null;
 }
