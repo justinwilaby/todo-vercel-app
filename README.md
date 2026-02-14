@@ -36,14 +36,19 @@ cp .env.example .env.local
 ```
 
 3. Set `DATABASE_URL` in `.env.local` using your Neon connection string.
+4. Set a seed token for protected seed endpoint access:
 
-4. Run locally:
+```bash
+echo "SEED_TOKEN=replace-with-strong-token" >> .env.local
+```
+
+5. Run locally:
 
 ```bash
 npm run dev
 ```
 
-5. Open `http://localhost:3000`.
+6. Open `http://localhost:3000`.
 
 ## Create Neon database
 
@@ -58,12 +63,32 @@ npm run dev
 2. In Vercel, import the repo.
 3. In Vercel project settings, add environment variable:
    - `DATABASE_URL` = your Neon connection string
+   - `SEED_TOKEN` = random strong string
 4. Deploy.
 5. Open the deployed URL and add a todo to confirm DB connectivity.
+
+## Seed sample data
+
+Protected endpoint:
+- `POST /api/seed`
+- Header required: `x-seed-token: <SEED_TOKEN>`
+- Use `?force=true` to append seed rows even when todos already exist.
+
+Local convenience script:
+
+```bash
+SEED_TOKEN=replace-with-strong-token npm run seed:local
+```
+
+Force append:
+
+```bash
+SEED_TOKEN=replace-with-strong-token bash scripts/seed.sh http://localhost:3000 --force
+```
 
 ## Notes for migration testing (Vercel -> Render)
 
 - Keep the same schema and `DATABASE_URL` contract.
-- For Render, set the same `DATABASE_URL` env var in your Web Service.
+- This repo includes `render.yaml` for Blueprint deploy.
+- For Render, set `DATABASE_URL` and `SEED_TOKEN` as service env vars.
 - Because this app initializes schema automatically, first request on Render can bootstrap the table.
-

@@ -1,4 +1,4 @@
-import { neon } from "@neondatabase/serverless";
+import { Pool } from "pg";
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -6,14 +6,29 @@ if (!databaseUrl) {
   throw new Error("DATABASE_URL is not set.");
 }
 
-const sql = neon(databaseUrl);
+type GlobalWithPgPool = typeof globalThis & {
+  __pgPool?: Pool;
+};
+
+const globalWithPgPool = globalThis as GlobalWithPgPool;
+
+const pool =
+  globalWithPgPool.__pgPool ??
+  new Pool({
+    connectionString: databaseUrl,
+    ssl: databaseUrl.includes("localhost") ? false : { rejectUnauthorized: false }
+  });
+
+if (process.env.NODE_ENV !== "production") {
+  globalWithPgPool.__pgPool = pool;
+}
 
 let schemaReady: Promise<void> | null = null;
 
 async function ensureSchema() {
   if (!schemaReady) {
     schemaReady = (async () => {
-      await sql`
+      await pool.query(`
         CREATE TABLE IF NOT EXISTS todos (
           id SERIAL PRIMARY KEY,
           title TEXT NOT NULL,
@@ -21,7 +36,7 @@ async function ensureSchema() {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
-      `;
+      `);
     })();
   }
 
@@ -48,12 +63,14 @@ function toTodoRecord(row: Record<string, unknown>): TodoRecord {
 
 export async function listTodos(): Promise<TodoRecord[]> {
   await ensureSchema();
-  const rows = await sql`
-    SELECT id, title, completed, created_at, updated_at
-    FROM todos
-    ORDER BY created_at DESC;
-  `;
-  return rows.map(toTodoRecord);
+  const result = await pool.query(
+    `
+      SELECT id, title, completed, created_at, updated_at
+      FROM todos
+      ORDER BY created_at DESC;
+    `
+  );
+  return result.rows.map((row) => toTodoRecord(row as Record<string, unknown>));
 }
 
 export async function createTodo(title: string): Promise<TodoRecord> {
@@ -64,13 +81,16 @@ export async function createTodo(title: string): Promise<TodoRecord> {
     throw new Error("Todo title is required.");
   }
 
-  const rows = await sql`
-    INSERT INTO todos (title)
-    VALUES (${trimmed})
-    RETURNING id, title, completed, created_at, updated_at;
-  `;
+  const result = await pool.query(
+    `
+      INSERT INTO todos (title)
+      VALUES ($1)
+      RETURNING id, title, completed, created_at, updated_at;
+    `,
+    [trimmed]
+  );
 
-  return toTodoRecord(rows[0]);
+  return toTodoRecord(result.rows[0] as Record<string, unknown>);
 }
 
 export async function updateTodo(
@@ -79,20 +99,22 @@ export async function updateTodo(
 ): Promise<TodoRecord | null> {
   await ensureSchema();
 
-  const existingRows = await sql`
-    SELECT id, title, completed, created_at, updated_at
-    FROM todos
-    WHERE id = ${id}
-    LIMIT 1;
-  `;
+  const existingResult = await pool.query(
+    `
+      SELECT id, title, completed, created_at, updated_at
+      FROM todos
+      WHERE id = $1
+      LIMIT 1;
+    `,
+    [id]
+  );
 
-  if (!existingRows[0]) {
+  if (!existingResult.rows[0]) {
     return null;
   }
-  const existing = toTodoRecord(existingRows[0]);
 
-  const nextTitle =
-    patch.title !== undefined ? patch.title.trim() : existing.title;
+  const existing = toTodoRecord(existingResult.rows[0] as Record<string, unknown>);
+  const nextTitle = patch.title !== undefined ? patch.title.trim() : existing.title;
   const nextCompleted =
     patch.completed !== undefined ? patch.completed : existing.completed;
 
@@ -100,25 +122,51 @@ export async function updateTodo(
     throw new Error("Todo title cannot be empty.");
   }
 
-  const rows = await sql`
-    UPDATE todos
-    SET title = ${nextTitle},
-        completed = ${nextCompleted},
-        updated_at = NOW()
-    WHERE id = ${id}
-    RETURNING id, title, completed, created_at, updated_at;
-  `;
+  const result = await pool.query(
+    `
+      UPDATE todos
+      SET title = $1,
+          completed = $2,
+          updated_at = NOW()
+      WHERE id = $3
+      RETURNING id, title, completed, created_at, updated_at;
+    `,
+    [nextTitle, nextCompleted, id]
+  );
 
-  return rows[0] ? toTodoRecord(rows[0]) : null;
+  return result.rows[0]
+    ? toTodoRecord(result.rows[0] as Record<string, unknown>)
+    : null;
 }
 
 export async function deleteTodo(id: number): Promise<TodoRecord | null> {
   await ensureSchema();
-  const rows = await sql`
-    DELETE FROM todos
-    WHERE id = ${id}
-    RETURNING id, title, completed, created_at, updated_at;
-  `;
+  const result = await pool.query(
+    `
+      DELETE FROM todos
+      WHERE id = $1
+      RETURNING id, title, completed, created_at, updated_at;
+    `,
+    [id]
+  );
 
-  return rows[0] ? toTodoRecord(rows[0]) : null;
+  return result.rows[0]
+    ? toTodoRecord(result.rows[0] as Record<string, unknown>)
+    : null;
+}
+
+export async function createManyTodos(titles: string[]): Promise<TodoRecord[]> {
+  await ensureSchema();
+  const created: TodoRecord[] = [];
+
+  for (const title of titles) {
+    const trimmed = title.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const todo = await createTodo(trimmed);
+    created.push(todo);
+  }
+
+  return created;
 }

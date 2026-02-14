@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: todo-vercel-app
+    runtime: node
+    plan: free
+    region: ohio
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    healthCheckPath: /api/todos
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: NODE_VERSION
+        value: 22
+      - key: SEED_TOKEN
+        generateValue: true

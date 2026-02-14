@@ -1,0 +1,205 @@
+workflow: vercel_to_render_single_use
+title: Vercel to Render Single Use Migration
+description: |
+  Single-use workflow to migrate the todo-vercel-app project from Vercel to Render
+  without requiring interactive inputs. It provisions Render Postgres, creates the
+  Render web service, transfers required environment variables, triggers a deploy,
+  and waits for deployment completion.
+
+requires:
+  catalogs:
+    - vendor: vercel
+      title: Vercel
+    - vendor: render
+      title: Render
+
+inputs:
+  vercel_project:
+    description: Vercel project name or id
+    type: string
+    default:
+      from: literal
+      value: todo-vercel-app
+  vercel_seed_env_id:
+    description: Vercel env var id for SEED_TOKEN
+    type: string
+    default:
+      from: literal
+      value: xYN62tZ9te8FpRof
+  render_owner_id:
+    description: Render owner/workspace id
+    type: string
+    default:
+      from: literal
+      value: tea-d4pge949c44c73b1lf90
+  render_service_name:
+    description: Render service name
+    type: string
+    default:
+      from: literal
+      value: todo-vercel-app
+  render_postgres_name:
+    description: Render Postgres database name
+    type: string
+    default:
+      from: literal
+      value: todo-vercel-app-db
+  render_postgres_plan:
+    description: Render Postgres plan
+    type: string
+    default:
+      from: literal
+      value: free
+  render_postgres_version:
+    description: Render Postgres major version
+    type: string
+    default:
+      from: literal
+      value: "16"
+  render_repo_url:
+    description: Git repository URL for Render
+    type: string
+    default:
+      from: literal
+      value: https://github.com/justinwilaby/todo-vercel-app
+  render_branch:
+    description: Git branch for Render deploys
+    type: string
+    default:
+      from: literal
+      value: main
+  render_region:
+    description: Render region
+    type: string
+    default:
+      from: literal
+      value: ohio
+  render_plan:
+    description: Render plan
+    type: string
+    default:
+      from: literal
+      value: free
+  build_command:
+    description: Build command for Render
+    type: string
+    default:
+      from: literal
+      value: npm install && npm run build
+  start_command:
+    description: Start command for Render
+    type: string
+    default:
+      from: literal
+      value: npm run start
+  health_check_path:
+    description: Health check path for Render
+    type: string
+    default:
+      from: literal
+      value: /api/todos
+  node_version:
+    description: Node.js version in Render env vars
+    type: string
+    default:
+      from: literal
+      value: "22"
+
+steps:
+  - id: verify_vercel_project
+    run: vercel projects:info
+    with:
+      idOrName: "${{ inputs.vercel_project }}"
+
+  - id: fetch_seed_token
+    run: vercel projects:env:info
+    depends_on:
+      - verify_vercel_project
+    with:
+      idOrName: "${{ inputs.vercel_project }}"
+      env: "${{ inputs.vercel_seed_env_id }}"
+
+  - id: create_render_postgres
+    run: render postgres:create
+    depends_on:
+      - verify_vercel_project
+    with:
+      name: "${{ inputs.render_postgres_name }}"
+      ownerId: "${{ inputs.render_owner_id }}"
+      plan: "${{ inputs.render_postgres_plan }}"
+      version: "${{ inputs.render_postgres_version }}"
+      region: "${{ inputs.render_region }}"
+
+  - id: wait_for_render_postgres
+    run: render postgres:info
+    depends_on:
+      - create_render_postgres
+    with:
+      postgresId: "${{ steps.create_render_postgres.id }}"
+    repeat:
+      every: 15s
+      timeout: 15m
+      max_attempts: 60
+      until: "steps.wait_for_render_postgres.status == \"available\""
+
+  - id: fetch_render_postgres_connection
+    run: render postgres:connection-info:list
+    depends_on:
+      - wait_for_render_postgres
+    with:
+      postgresId: "${{ steps.create_render_postgres.id }}"
+
+  - id: create_render_service
+    run: render services:create
+    depends_on:
+      - fetch_seed_token
+      - fetch_render_postgres_connection
+    with:
+      name: "${{ inputs.render_service_name }}"
+      ownerId: "${{ inputs.render_owner_id }}"
+      type: web_service
+      repo: "${{ inputs.render_repo_url }}"
+      branch: "${{ inputs.render_branch }}"
+      autoDeploy: "yes"
+      serviceDetails:
+        env: node
+        region: "${{ inputs.render_region }}"
+        plan: "${{ inputs.render_plan }}"
+        envSpecificDetails:
+          buildCommand: "${{ inputs.build_command }}"
+          startCommand: "${{ inputs.start_command }}"
+        healthCheckPath: "${{ inputs.health_check_path }}"
+      envVars:
+        - key: DATABASE_URL
+          value: "${{ steps.fetch_render_postgres_connection.internalConnectionString }}"
+        - key: SEED_TOKEN
+          value: "${{ steps.fetch_seed_token.value }}"
+        - key: NODE_VERSION
+          value: "${{ inputs.node_version }}"
+
+  - id: trigger_initial_deploy
+    run: render services:deploys:create
+    depends_on:
+      - create_render_service
+    with:
+      serviceId: "${{ steps.create_render_service.service.id }}"
+
+  - id: wait_for_deploy
+    run: render services:deploys:info
+    depends_on:
+      - trigger_initial_deploy
+    with:
+      serviceId: "${{ steps.create_render_service.service.id }}"
+      deployId: "${{ steps.trigger_initial_deploy.id }}"
+    repeat:
+      every: 15s
+      timeout: 15m
+      max_attempts: 60
+      until: '["live","build_failed","update_failed","pre_deploy_failed","canceled","deactivated"].includes(steps.wait_for_deploy.status)'
+
+  - id: fetch_service_details
+    run: render services:info
+    depends_on:
+      - wait_for_deploy
+    with:
+      serviceId: "${{ steps.create_render_service.service.id }}"
