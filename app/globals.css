@@ -1,0 +1,158 @@
+:root {
+  color-scheme: light;
+  --bg: #f3efe4;
+  --card: #fff9ee;
+  --text: #1e1a16;
+  --muted: #6b6157;
+  --accent: #c74f1f;
+  --accent-contrast: #fff8f2;
+  --line: #d8c8b8;
+  --ok: #2c7b53;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background:
+    radial-gradient(circle at 80% 0%, #f8d9bf 0%, transparent 38%),
+    radial-gradient(circle at 0% 100%, #e8d6bf 0%, transparent 34%),
+    var(--bg);
+  color: var(--text);
+  font-family: var(--font-geist-sans), sans-serif;
+}
+
+main {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 2rem 1rem;
+}
+
+.panel {
+  width: min(760px, 100%);
+  background: var(--card);
+  border: 2px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 12px 36px rgba(30, 26, 22, 0.12);
+  padding: 1.25rem;
+}
+
+.title {
+  margin: 0 0 0.25rem;
+  font-size: clamp(1.6rem, 3.6vw, 2.2rem);
+  line-height: 1.1;
+}
+
+.subtitle {
+  margin: 0 0 1rem;
+  color: var(--muted);
+}
+
+.row {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+input[type="text"] {
+  flex: 1 1 250px;
+  min-width: 0;
+  border: 2px solid var(--line);
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  font: inherit;
+  background: #fffcf7;
+}
+
+button {
+  border: 0;
+  border-radius: 10px;
+  padding: 0.6rem 0.85rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.btn-muted {
+  background: #efe2d4;
+  color: #4c4035;
+}
+
+.btn-link {
+  background: transparent;
+  color: var(--muted);
+  padding: 0.3rem 0.4rem;
+}
+
+.status {
+  margin: 0 0 0.8rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.6rem;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem;
+  background: #fffefb;
+}
+
+.item.is-completed .todo-title {
+  text-decoration: line-through;
+  color: var(--ok);
+}
+
+.todo-title {
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+.counts {
+  margin-top: 0.9rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.error {
+  color: #a42400;
+}
+
+@media (max-width: 620px) {
+  .item {
+    grid-template-columns: auto 1fr;
+  }
+
+  .actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+}
