@@ -3,8 +3,8 @@ title: Vercel to Render Single Use Migration
 description: |
   Single-use workflow to migrate the todo-vercel-app project from Vercel to Render
   without requiring interactive inputs. It provisions Render Postgres, creates the
-  Render web service, transfers required environment variables, triggers a deploy,
-  and waits for deployment completion.
+  Render web service, migrates todo data from Neon to Render Postgres using a
+  one-off job, triggers a deploy, and waits for completion.
 
 requires:
   catalogs:
@@ -20,6 +20,12 @@ inputs:
     default:
       from: literal
       value: todo-vercel-app
+  vercel_database_env_id:
+    description: Vercel env var id for DATABASE_URL
+    type: string
+    default:
+      from: literal
+      value: 0APacvrvVX746f72
   vercel_seed_env_id:
     description: Vercel env var id for SEED_TOKEN
     type: string
@@ -97,7 +103,7 @@ inputs:
     type: string
     default:
       from: literal
-      value: /api/todos
+      value: /api/healthz
   node_version:
     description: Node.js version in Render env vars
     type: string
@@ -118,6 +124,14 @@ steps:
     with:
       idOrName: "${{ inputs.vercel_project }}"
       env: "${{ inputs.vercel_seed_env_id }}"
+
+  - id: fetch_source_database_url
+    run: vercel projects:env:info
+    depends_on:
+      - verify_vercel_project
+    with:
+      idOrName: "${{ inputs.vercel_project }}"
+      env: "${{ inputs.vercel_database_env_id }}"
 
   - id: create_render_postgres
     run: render postgres:create
@@ -153,6 +167,7 @@ steps:
     run: render services:create
     depends_on:
       - fetch_seed_token
+      - fetch_source_database_url
       - fetch_render_postgres_connection
     with:
       name: "${{ inputs.render_service_name }}"
@@ -160,7 +175,7 @@ steps:
       type: web_service
       repo: "${{ inputs.render_repo_url }}"
       branch: "${{ inputs.render_branch }}"
-      autoDeploy: "yes"
+      autoDeploy: "no"
       serviceDetails:
         env: node
         region: "${{ inputs.render_region }}"
@@ -172,6 +187,8 @@ steps:
       envVars:
         - key: DATABASE_URL
           value: "${{ steps.fetch_render_postgres_connection.internalConnectionString }}"
+        - key: SOURCE_DATABASE_URL
+          value: "${{ steps.fetch_source_database_url.value }}"
         - key: SEED_TOKEN
           value: "${{ steps.fetch_seed_token.value }}"
         - key: NODE_VERSION
@@ -195,11 +212,57 @@ steps:
       every: 15s
       timeout: 15m
       max_attempts: 60
-      until: '["live","build_failed","update_failed","pre_deploy_failed","canceled","deactivated"].includes(steps.wait_for_deploy.status)'
+      until: "steps.wait_for_deploy.status == \"live\""
+
+  - id: run_data_migration_job
+    run: render services:jobs:create
+    depends_on:
+      - wait_for_deploy
+    with:
+      serviceId: "${{ steps.create_render_service.service.id }}"
+      startCommand: >-
+        node -e "const { Client } = require('pg'); (async () => { const sourceUrl = process.env.SOURCE_DATABASE_URL; const targetUrl = process.env.DATABASE_URL; if (!sourceUrl || !targetUrl) throw new Error('SOURCE_DATABASE_URL and DATABASE_URL are required'); const source = new Client({ connectionString: sourceUrl }); const target = new Client({ connectionString: targetUrl }); await source.connect(); await target.connect(); try { await target.query('BEGIN'); await target.query('CREATE TABLE IF NOT EXISTS todos (id SERIAL PRIMARY KEY, title TEXT NOT NULL, completed BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())'); const { rows } = await source.query('SELECT id, title, completed, created_at, updated_at FROM todos ORDER BY id ASC'); for (const row of rows) { await target.query('INSERT INTO todos (id, title, completed, created_at, updated_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, completed = EXCLUDED.completed, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at', [row.id, row.title, row.completed, row.created_at, row.updated_at]); } await target.query(\"SELECT setval('todos_id_seq', COALESCE((SELECT MAX(id) FROM todos), 1), true)\"); await target.query('COMMIT'); console.log('Migration complete. Rows copied:', rows.length); } catch (error) { await target.query('ROLLBACK'); throw error; } finally { await source.end(); await target.end(); } })().catch((error) => { console.error(error); process.exit(1); });"
+
+  - id: wait_for_migration_job
+    run: render services:jobs:info
+    depends_on:
+      - run_data_migration_job
+    with:
+      serviceId: "${{ steps.create_render_service.service.id }}"
+      jobId: "${{ steps.run_data_migration_job.id }}"
+    repeat:
+      every: 10s
+      timeout: 20m
+      max_attempts: 120
+      until: "[\"succeeded\",\"failed\",\"canceled\"].includes(steps.wait_for_migration_job.status)"
+
+  - id: fail_if_migration_not_succeeded
+    run: render services:jobs:info
+    depends_on:
+      - wait_for_migration_job
+    if: "steps.wait_for_migration_job.status != \"succeeded\""
+    with:
+      serviceId: "${{ steps.create_render_service.service.id }}"
+      jobId: force-failure
+
+  - id: remove_source_database_url
+    run: render services:env-vars:update
+    depends_on:
+      - wait_for_migration_job
+      - fail_if_migration_not_succeeded
+    with:
+      serviceId: "${{ steps.create_render_service.service.id }}"
+      body:
+        - key: DATABASE_URL
+          value: "${{ steps.fetch_render_postgres_connection.internalConnectionString }}"
+        - key: SEED_TOKEN
+          value: "${{ steps.fetch_seed_token.value }}"
+        - key: NODE_VERSION
+          value: "${{ inputs.node_version }}"
 
   - id: fetch_service_details
     run: render services:info
     depends_on:
-      - wait_for_deploy
+      - remove_source_database_url
     with:
       serviceId: "${{ steps.create_render_service.service.id }}"

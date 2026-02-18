@@ -6,7 +6,7 @@ services:
     region: ohio
     buildCommand: npm install && npm run build
     startCommand: npm run start
-    healthCheckPath: /api/todos
+    healthCheckPath: /api/healthz
     envVars:
       - key: DATABASE_URL
         sync: false
